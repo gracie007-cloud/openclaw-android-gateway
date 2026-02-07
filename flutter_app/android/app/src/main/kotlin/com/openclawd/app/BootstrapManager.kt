@@ -234,7 +234,10 @@ class BootstrapManager(
         dpkgConfDir.mkdirs()
         File(dpkgConfDir, "01-openclawd-proot").writeText(
             "force-unsafe-io\n" +
-            "no-debsig\n"
+            "no-debsig\n" +
+            "force-script-chrono\n" +
+            "force-overwrite\n" +
+            "force-depends\n"
         )
 
         // 3. Ensure /etc/machine-id exists (dpkg triggers and systemd utils need it)

@@ -98,10 +98,14 @@ class ProcessManager(
                 continue
             }
             output.appendLine(l)
-            // Collect error-relevant lines (skip apt download progress)
+            // Collect error-relevant lines (skip apt progress and info noise)
             if (!l.startsWith("Get:") && !l.startsWith("Fetched ") &&
                 !l.startsWith("Hit:") && !l.startsWith("Ign:") &&
-                !l.contains(" kB]") && !l.contains(" MB]")) {
+                !l.contains(" kB]") && !l.contains(" MB]") &&
+                !l.startsWith("Reading package") && !l.startsWith("Building dependency") &&
+                !l.startsWith("Reading state") && !l.startsWith("The following") &&
+                !l.startsWith("Need to get") && !l.startsWith("After this") &&
+                l.trim().isNotEmpty()) {
                 errorLines.appendLine(l)
             }
         }

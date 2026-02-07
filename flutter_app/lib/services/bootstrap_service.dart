@@ -91,15 +91,16 @@ class BootstrapService {
         progress: 0.0,
         message: 'Fixing rootfs permissions...',
       ));
+      // Blanket recursive chmod on all bin/lib directories.
+      // Java tar extraction loses execute bits; dpkg needs tar, xz,
+      // gzip, rm, mv, etc. — easier to fix everything than enumerate.
       await NativeBridge.runInProot(
-        'chmod 755 /usr/bin/dpkg /usr/bin/dpkg-* /usr/bin/apt* '
-        '/usr/lib/apt/methods/* /usr/bin/perl* /usr/bin/bash '
-        '/bin/bash /bin/sh 2>/dev/null; '
-        'chmod -R 755 /usr/sbin /usr/lib/dpkg 2>/dev/null; '
-        'chmod +x /var/lib/dpkg/info/* 2>/dev/null; '
-        'chmod +x /usr/share/debconf/* 2>/dev/null; '
-        'chmod -R +x /usr/lib/dpkg/ 2>/dev/null; '
+        'chmod -R 755 /usr/bin /usr/sbin /bin /sbin '
+        '/usr/local/bin /usr/local/sbin 2>/dev/null; '
+        'chmod -R +x /usr/lib/apt/ /usr/lib/dpkg/ /usr/libexec/ '
+        '/var/lib/dpkg/info/ /usr/share/debconf/ 2>/dev/null; '
         'chmod 755 /lib/*/ld-linux-*.so* /usr/lib/*/ld-linux-*.so* 2>/dev/null; '
+        'mkdir -p /var/lib/dpkg/updates /var/lib/dpkg/triggers; '
         'echo permissions_fixed',
       );
 
@@ -131,9 +132,8 @@ class BootstrapService {
         progress: 0.2,
         message: 'Installing base packages...',
       ));
-      // Use -q to suppress download progress so dpkg errors are visible
-      // in the error output (last 2000 chars).
-      // Retry logic: if first attempt fails, repair dpkg and try again.
+      // Retry logic: if first attempt fails, do blanket permission fix
+      // and retry with --force-all to get past any remaining dpkg issues.
       try {
         await NativeBridge.runInProot(
           'apt-get -q install -y --no-install-recommends '
@@ -146,17 +146,21 @@ class BootstrapService {
           progress: 0.2,
           message: 'Repairing packages and retrying...',
         ));
-        // Fix permissions again (dpkg may have extracted new scripts)
+        // Blanket permission fix again (dpkg may have extracted new scripts)
+        // + repair dpkg state
         await NativeBridge.runInProot(
-          'chmod +x /var/lib/dpkg/info/* 2>/dev/null; '
-          'chmod -R +x /usr/lib/dpkg/ 2>/dev/null; '
-          'dpkg --configure -a 2>&1 || true; '
-          'apt --fix-broken install -y 2>&1 || true',
+          'chmod -R 755 /usr/bin /usr/sbin /bin /sbin 2>/dev/null; '
+          'chmod -R +x /usr/lib/apt/ /usr/lib/dpkg/ '
+          '/var/lib/dpkg/info/ /usr/share/debconf/ 2>/dev/null; '
+          'dpkg --force-all --configure -a 2>&1 || true; '
+          'apt --fix-broken install -y '
+          '-o Dpkg::Options::="--force-all" 2>&1 || true',
         );
-        // Second attempt
+        // Second attempt with --force-all to push past stubborn errors
         await NativeBridge.runInProot(
           'apt-get -q install -y --no-install-recommends '
           '-o Dpkg::Options::="--force-confdef" '
+          '-o Dpkg::Options::="--force-all" '
           'ca-certificates curl gnupg',
         );
       }
