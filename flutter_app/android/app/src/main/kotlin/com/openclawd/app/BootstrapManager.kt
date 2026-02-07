@@ -70,8 +70,12 @@ class BootstrapManager(
         rootfs.mkdirs()
 
         // Pure Java extraction using Apache Commons Compress.
-        // Avoids all proot/tar compatibility issues with Android kernels.
-        // Hard links are converted to symlinks (like proot --link2symlink).
+        // Two-phase approach:
+        //   Phase 1: Extract directories, regular files, and hard links (as copies).
+        //   Phase 2: Create all symlinks (deferred so directory structure exists first).
+        // This handles tarball entry ordering issues (e.g., bin/bash before bin→usr/bin).
+        val deferredSymlinks = mutableListOf<Pair<String, String>>() // target, path
+
         FileInputStream(tarPath).use { fis ->
             BufferedInputStream(fis, 256 * 1024).use { bis ->
                 GZIPInputStream(bis).use { gis ->
@@ -82,7 +86,6 @@ class BootstrapManager(
                                 .removePrefix("./")
                                 .removePrefix("/")
 
-                            // Skip empty names and /dev entries
                             if (name.isEmpty() || name.startsWith("dev/") || name == "dev") {
                                 entry = tis.nextEntry
                                 continue
@@ -95,29 +98,25 @@ class BootstrapManager(
                                     outFile.mkdirs()
                                 }
                                 entry.isSymbolicLink -> {
-                                    outFile.parentFile?.mkdirs()
-                                    try {
-                                        if (outFile.exists() || isSymlink(outFile)) {
-                                            outFile.delete()
-                                        }
-                                        Os.symlink(entry.linkName, outFile.absolutePath)
-                                    } catch (_: Exception) {}
+                                    // Defer symlinks to phase 2
+                                    deferredSymlinks.add(
+                                        Pair(entry.linkName, outFile.absolutePath)
+                                    )
                                 }
                                 entry.isLink -> {
-                                    // Hard link → symlink (same as --link2symlink)
-                                    outFile.parentFile?.mkdirs()
+                                    // Hard link → copy the target file
+                                    // (symlinks break inside proot due to path translation)
                                     val target = entry.linkName
                                         .removePrefix("./")
                                         .removePrefix("/")
+                                    val targetFile = File(rootfsDir, target)
+                                    outFile.parentFile?.mkdirs()
                                     try {
-                                        if (outFile.exists() || isSymlink(outFile)) {
-                                            outFile.delete()
-                                        }
-                                        // Use absolute path within rootfs so it works
-                                        // both on host and inside proot
-                                        val targetFile = File(rootfsDir, target)
                                         if (targetFile.exists()) {
-                                            Os.symlink(targetFile.absolutePath, outFile.absolutePath)
+                                            targetFile.copyTo(outFile, overwrite = true)
+                                            if (targetFile.canExecute()) {
+                                                outFile.setExecutable(true, false)
+                                            }
                                         }
                                     } catch (_: Exception) {}
                                 }
@@ -131,7 +130,7 @@ class BootstrapManager(
                                             fos.write(buf, 0, len)
                                         }
                                     }
-                                    // Preserve execute permission
+                                    // Preserve permissions
                                     if (entry.mode and 0b001_001_001 != 0) {
                                         outFile.setExecutable(true, false)
                                     }
@@ -151,23 +150,60 @@ class BootstrapManager(
             }
         }
 
+        // Phase 2: Create all symlinks now that the directory structure exists.
+        // If a directory was created where a symlink should be (due to entry ordering),
+        // we delete the directory first. This handles Ubuntu's merged /usr layout
+        // where /bin → usr/bin, /sbin → usr/sbin, /lib → usr/lib.
+        for ((target, path) in deferredSymlinks) {
+            try {
+                val file = File(path)
+                if (file.exists()) {
+                    if (file.isDirectory) {
+                        // Directory exists where symlink should be — move contents
+                        // to the real target directory, then replace with symlink.
+                        // This handles /bin (dir with files) → usr/bin (symlink).
+                        val linkTarget = if (target.startsWith("/")) {
+                            target.removePrefix("/")
+                        } else {
+                            // Resolve relative target against parent dir
+                            val parent = file.parentFile?.absolutePath ?: rootfsDir
+                            File(parent, target).relativeTo(File(rootfsDir)).path
+                        }
+                        val realTargetDir = File(rootfsDir, linkTarget)
+                        if (realTargetDir.exists() && realTargetDir.isDirectory) {
+                            // Move files from this dir to the real target dir
+                            file.listFiles()?.forEach { child ->
+                                val dest = File(realTargetDir, child.name)
+                                if (!dest.exists()) {
+                                    child.renameTo(dest)
+                                }
+                            }
+                        }
+                        deleteRecursively(file)
+                    } else {
+                        file.delete()
+                    }
+                }
+                file.parentFile?.mkdirs()
+                Os.symlink(target, path)
+            } catch (_: Exception) {}
+        }
+
         // Verify extraction
-        if (!File("$rootfsDir/bin/bash").exists()) {
-            throw RuntimeException("Extraction failed: /bin/bash not found in rootfs")
+        if (!File("$rootfsDir/bin/bash").exists() &&
+            !File("$rootfsDir/usr/bin/bash").exists()) {
+            throw RuntimeException("Extraction failed: bash not found in rootfs")
         }
 
         // Clean up tarball
         File(tarPath).delete()
     }
 
-    private fun isSymlink(file: File): Boolean {
-        return try {
-            val canonical = file.canonicalFile
-            val absolute = file.absoluteFile
-            canonical.path != absolute.path
-        } catch (_: Exception) {
-            false
+    private fun deleteRecursively(file: File) {
+        if (file.isDirectory) {
+            file.listFiles()?.forEach { deleteRecursively(it) }
         }
+        file.delete()
     }
 
     fun installBionicBypass() {
