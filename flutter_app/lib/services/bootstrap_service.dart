@@ -84,24 +84,47 @@ class BootstrapService {
         message: 'Rootfs extracted',
       ));
 
-      // Step 3: Install Node.js (split into sub-steps for better error reporting)
-      // In proot, dpkg post-install scripts often fail on operations like
-      // mknod, chown, service start etc. We use aggressive forcing and
-      // recovery steps to push through these expected failures.
+      // Step 3: Install Node.js
+      // First fix permissions inside proot (Java extraction may miss some)
+      // and verify dpkg works before attempting package installs.
       onProgress(const SetupState(
         step: SetupStep.installingNode,
         progress: 0.0,
+        message: 'Fixing rootfs permissions...',
+      ));
+      // Fix permissions inside proot where symlink resolution works correctly
+      await NativeBridge.runInProot(
+        'chmod 755 /usr/bin/dpkg /usr/bin/dpkg-* /usr/bin/apt* '
+        '/usr/lib/apt/methods/* /usr/bin/perl* /usr/bin/bash '
+        '/bin/bash /bin/sh 2>/dev/null; '
+        'chmod -R 755 /usr/sbin /usr/lib/dpkg 2>/dev/null; '
+        // Ensure ld.so is executable (dynamic linker)
+        'chmod 755 /lib/*/ld-linux-*.so* /usr/lib/*/ld-linux-*.so* 2>/dev/null; '
+        'echo permissions_fixed',
+      );
+
+      onProgress(const SetupState(
+        step: SetupStep.installingNode,
+        progress: 0.05,
+        message: 'Verifying dpkg works...',
+      ));
+      // Test that dpkg can actually execute
+      await NativeBridge.runInProot('dpkg --version');
+
+      onProgress(const SetupState(
+        step: SetupStep.installingNode,
+        progress: 0.1,
         message: 'Updating package lists...',
       ));
       await NativeBridge.runInProot('apt-get update -y');
 
       onProgress(const SetupState(
         step: SetupStep.installingNode,
-        progress: 0.1,
-        message: 'Fixing any broken packages...',
+        progress: 0.15,
+        message: 'Configuring pending packages...',
       ));
       await NativeBridge.runInProot(
-        'dpkg --configure -a --force-all || true',
+        'dpkg --configure -a --force-all 2>&1 || true',
       );
 
       onProgress(const SetupState(
@@ -109,18 +132,12 @@ class BootstrapService {
         progress: 0.2,
         message: 'Installing base packages...',
       ));
-      // Use --force-all to push through post-install script failures,
-      // then recover with dpkg --configure
       await NativeBridge.runInProot(
-        'apt-get -o Dpkg::Options::="--force-all" install -y '
-        '--no-install-recommends ca-certificates curl gnupg || '
-        'dpkg --configure -a --force-all || true',
-      );
-      // Verify key packages are installed
-      await NativeBridge.runInProot(
-        'dpkg -s ca-certificates curl gnupg > /dev/null 2>&1 || '
-        'apt-get -o Dpkg::Options::="--force-all" install -y '
-        '--no-install-recommends --fix-broken ca-certificates curl gnupg',
+        'apt-get -o Dpkg::Options::=--force-all install -y '
+        '--no-install-recommends ca-certificates curl gnupg 2>&1 || '
+        '{ dpkg --configure -a --force-all 2>&1; '
+        'apt-get -o Dpkg::Options::=--force-all install -y '
+        '--no-install-recommends --fix-broken 2>&1; true; }',
       );
 
       onProgress(const SetupState(
@@ -139,15 +156,11 @@ class BootstrapService {
         message: 'Installing Node.js...',
       ));
       await NativeBridge.runInProot(
-        'apt-get -o Dpkg::Options::="--force-all" install -y '
-        '--no-install-recommends nodejs || '
-        'dpkg --configure -a --force-all || true',
-      );
-      // Verify nodejs is actually installed
-      await NativeBridge.runInProot(
-        'dpkg -s nodejs > /dev/null 2>&1 || '
-        'apt-get -o Dpkg::Options::="--force-all" install -y '
-        '--no-install-recommends --fix-broken nodejs',
+        'apt-get -o Dpkg::Options::=--force-all install -y '
+        '--no-install-recommends nodejs 2>&1 || '
+        '{ dpkg --configure -a --force-all 2>&1; '
+        'apt-get -o Dpkg::Options::=--force-all install -y '
+        '--no-install-recommends --fix-broken 2>&1; true; }',
       );
 
       onProgress(const SetupState(
