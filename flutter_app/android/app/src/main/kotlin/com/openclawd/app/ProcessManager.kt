@@ -70,8 +70,17 @@ class ProcessManager(
     private val libDir get() = "$filesDir/lib"
 
     private fun prootEnv(): Map<String, String> = mapOf(
+        // proot needs these host-side environment variables.
+        // IMPORTANT: ProcessBuilder env is CLEARED first (see runInProotSync)
+        // to avoid Android JVM env contamination (LD_PRELOAD, CLASSPATH, etc.)
+        // which breaks fork+exec inside proot. proot-distro uses `env -i` for
+        // the same reason.
         "PROOT_TMP_DIR" to tmpDir,
-        "PROOT_NO_SECCOMP" to "1",
+        // NOTE: Do NOT set PROOT_NO_SECCOMP. proot-distro does NOT set it.
+        // With seccomp enabled, proot uses BPF filter + PTRACE_CONT for
+        // efficient syscall interception AND proper fork/clone tracking.
+        // Without seccomp, proot uses pure PTRACE_SYSCALL which is slower
+        // and may miss some syscall interception on newer kernels.
         // NOTE: Do NOT set PROOT_L2S_DIR here. proot-distro sets it because
         // it extracts via `proot --link2symlink tar`, creating L2S metadata
         // in that dir. We extract with Java, so no L2S metadata exists.
@@ -79,8 +88,13 @@ class ProcessManager(
         // file resolution (ENOSYS on open).
         "PROOT_LOADER" to "$nativeLibDir/libprootloader.so",
         "PROOT_LOADER_32" to "$nativeLibDir/libprootloader32.so",
+        // LD_LIBRARY_PATH is only needed for proot itself to find libtalloc.
+        // It must NOT leak into the rootfs guest environment.
         "LD_LIBRARY_PATH" to "$libDir:$nativeLibDir",
-        "HOME" to "/root"
+        "HOME" to "/root",
+        // Minimal safe environment — avoid inheriting Android JVM vars
+        "TERM" to "xterm-256color",
+        "PATH" to "/usr/bin:/bin",
     )
 
     fun runInProotSync(command: String, timeoutSeconds: Long = 900): String {
@@ -88,6 +102,10 @@ class ProcessManager(
         val env = prootEnv()
 
         val pb = ProcessBuilder(cmd)
+        // CRITICAL: Clear inherited Android JVM environment first.
+        // Without this, LD_PRELOAD, CLASSPATH, DEX2OAT vars etc. leak
+        // into proot and break fork+exec. proot-distro uses `env -i`.
+        pb.environment().clear()
         pb.environment().putAll(env)
         pb.redirectErrorStream(true)
 
@@ -141,6 +159,7 @@ class ProcessManager(
         val env = prootEnv()
 
         val pb = ProcessBuilder(cmd)
+        pb.environment().clear()
         pb.environment().putAll(env)
         pb.redirectErrorStream(false)
 
