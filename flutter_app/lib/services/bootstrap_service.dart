@@ -137,16 +137,36 @@ class BootstrapService {
 
       onProgress(const SetupState(
         step: SetupStep.installingNode,
+        progress: 0.3,
+        message: 'Configuring certificates...',
+      ));
+      // Java extraction doesn't run postinst scripts. ca-certificates
+      // needs update-ca-certificates to generate the cert bundle.
+      // Try it first; if it fails (fork issues), manually concatenate certs.
+      try {
+        await NativeBridge.runInProot('update-ca-certificates 2>/dev/null');
+      } catch (_) {
+        // Manual fallback: concatenate all Mozilla CA certs into the bundle
+        await NativeBridge.runInProot(
+          'mkdir -p /etc/ssl/certs 2>/dev/null; '
+          'cat /usr/share/ca-certificates/mozilla/*.crt '
+          '> /etc/ssl/certs/ca-certificates.crt 2>/dev/null; '
+          'echo certs_done',
+        );
+      }
+
+      onProgress(const SetupState(
+        step: SetupStep.installingNode,
         progress: 0.4,
         message: 'Adding NodeSource repository...',
       ));
       // The NodeSource setup script internally runs apt-get which fails
       // (fork+exec issue). Add the repo manually instead.
-      // NOTE: pipes (cmd1 | cmd2) require bash to fork two processes,
-      // which may fail. Use a temp file instead.
+      // Use curl -k as fallback if certs are still broken.
       await NativeBridge.runInProot(
-        'mkdir -p /usr/share/keyrings; '
         'curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key '
+        '-o /tmp/nodesource.gpg.key 2>/dev/null || '
+        'curl -fsSLk https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key '
         '-o /tmp/nodesource.gpg.key',
       );
       await NativeBridge.runInProot(

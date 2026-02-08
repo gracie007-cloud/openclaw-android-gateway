@@ -417,7 +417,16 @@ class BootstrapManager(
             "force-depends\n"
         )
 
-        // 3. Ensure /etc/machine-id exists (dpkg triggers and systemd utils need it)
+        // 3. Ensure essential directories exist
+        listOf(
+            "$rootfsDir/etc/ssl/certs",
+            "$rootfsDir/usr/share/keyrings",
+            "$rootfsDir/etc/apt/sources.list.d",
+            "$rootfsDir/var/lib/dpkg/updates",
+            "$rootfsDir/var/lib/dpkg/triggers",
+        ).forEach { File(it).mkdirs() }
+
+        // 4. Ensure /etc/machine-id exists (dpkg triggers and systemd utils need it)
         val machineId = File("$rootfsDir/etc/machine-id")
         if (!machineId.exists()) {
             machineId.parentFile?.mkdirs()
