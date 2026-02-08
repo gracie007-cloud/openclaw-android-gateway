@@ -12,6 +12,7 @@ import org.apache.commons.compress.archivers.ar.ArArchiveInputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
+import org.apache.commons.compress.compressors.zstandard.ZstdCompressorInputStream
 
 class BootstrapManager(
     private val context: Context,
@@ -302,11 +303,7 @@ class BootstrapManager(
                             val dataStream: InputStream = when {
                                 name.endsWith(".xz") -> XZCompressorInputStream(arIn)
                                 name.endsWith(".gz") -> GZIPInputStream(arIn)
-                                name.endsWith(".zst") -> {
-                                    // zstd not supported without native lib — skip
-                                    // Most Ubuntu packages use xz or gz
-                                    throw RuntimeException("zstd compression not supported")
-                                }
+                                name.endsWith(".zst") -> ZstdCompressorInputStream(arIn)
                                 else -> arIn // plain .tar or unknown
                             }
 
