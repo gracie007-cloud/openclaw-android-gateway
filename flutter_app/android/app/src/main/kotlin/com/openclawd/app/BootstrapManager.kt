@@ -607,8 +607,50 @@ class BootstrapManager(
         val bypassDir = File("$rootfsDir/root/.openclawd")
         bypassDir.mkdirs()
 
+        // 1. CWD fix — proot's getcwd() syscall returns ENOSYS on Android 10+.
+        //    process.cwd() is called by Node's CJS module resolver and npm.
+        //    This MUST be loaded before any other module.
+        val cwdFixContent = """
+// OpenClawd CWD Fix - Auto-generated
+// proot on Android 10+ returns ENOSYS for getcwd() syscall.
+// Patch process.cwd to return /root on failure.
+const _origCwd = process.cwd;
+process.cwd = function() {
+  try { return _origCwd.call(process); }
+  catch(e) { return process.env.HOME || '/root'; }
+};
+""".trimIndent()
+        File(bypassDir, "cwd-fix.js").writeText(cwdFixContent)
+
+        // 2. Node wrapper — loads cwd fix then runs the target script.
+        //    Used during bootstrap (where NODE_OPTIONS must be unset).
+        //    Usage: node /root/.openclawd/node-wrapper.js <script> [args...]
+        val wrapperContent = """
+// OpenClawd Node Wrapper - Auto-generated
+// Patches process.cwd, then loads the script from argv[2+]
+const _origCwd = process.cwd;
+process.cwd = function() {
+  try { return _origCwd.call(process); }
+  catch(e) { return process.env.HOME || '/root'; }
+};
+const script = process.argv[2];
+if (script) {
+  // Shift argv so the target script sees correct args
+  process.argv = [process.argv[0], script, ...process.argv.slice(3)];
+  require(script);
+} else {
+  console.log('Usage: node node-wrapper.js <script> [args...]');
+  process.exit(1);
+}
+""".trimIndent()
+        File(bypassDir, "node-wrapper.js").writeText(wrapperContent)
+
+        // 3. Bionic bypass — patches os.networkInterfaces for Android
         val bypassContent = """
 // OpenClawd Bionic Bypass - Auto-generated
+// Load CWD fix first
+require('/root/.openclawd/cwd-fix.js');
+
 const os = require('os');
 const originalNetworkInterfaces = os.networkInterfaces;
 
@@ -638,7 +680,7 @@ os.networkInterfaces = function() {
 };
 """.trimIndent()
 
-        File("$rootfsDir/root/.openclawd/bionic-bypass.js").writeText(bypassContent)
+        File(bypassDir, "bionic-bypass.js").writeText(bypassContent)
 
         // Patch .bashrc
         val bashrc = File("$rootfsDir/root/.bashrc")

@@ -84,6 +84,10 @@ class BootstrapService {
         message: 'Rootfs extracted',
       ));
 
+      // Install bionic bypass + cwd-fix + node-wrapper BEFORE using node.
+      // The wrapper patches process.cwd() which returns ENOSYS in proot.
+      await NativeBridge.installBionicBypass();
+
       // Step 3: Install Node.js
       // Fix permissions inside proot (Java extraction may miss execute bits)
       onProgress(const SetupState(
@@ -206,15 +210,17 @@ class BootstrapService {
         progress: 0.9,
         message: 'Verifying Node.js...',
       ));
-      // npm's shebang is #!/usr/bin/env node — env needs to fork+exec
-      // node, which fails in proot (level 2+ fork). Call node directly.
-      // Also unset NODE_OPTIONS — the bionic-bypass preload triggers
-      // process.cwd() during CJS module loading, which returns ENOSYS
-      // in proot. Bionic-bypass is only needed for the gateway, not install.
-      const nodeCmd = 'unset NODE_OPTIONS; node';
+      // proot's getcwd() syscall returns ENOSYS on Android 10+.
+      // node --version works (exits before module system init), but any
+      // require() call triggers process.cwd() which crashes.
+      // Fix: use node-wrapper.js which patches process.cwd before
+      // loading the target script. Installed by installBionicBypass().
+      // Also unset NODE_OPTIONS (bionic-bypass only needed at gateway runtime).
+      const wrapper = '/root/.openclawd/node-wrapper.js';
+      const nodeRun = 'unset NODE_OPTIONS; node $wrapper';
       final npmCli = '/usr/lib/node_modules/npm/bin/npm-cli.js';
       await NativeBridge.runInProot(
-        '$nodeCmd --version && $nodeCmd $npmCli --version',
+        'node --version && $nodeRun $npmCli --version',
       );
       onProgress(const SetupState(
         step: SetupStep.installingNode,
@@ -233,7 +239,7 @@ class BootstrapService {
       // (sharp, node-pty) download prebuilts in postinstall — we handle
       // sharp manually below; node-pty is optional for gateway mode.
       await NativeBridge.runInProot(
-        '$nodeCmd $npmCli install -g openclaw --ignore-scripts',
+        '$nodeRun $npmCli install -g openclaw --ignore-scripts',
         timeout: 1800,
       );
 
@@ -246,9 +252,7 @@ class BootstrapService {
       // Normally postinstall fetches it; we download manually.
       try {
         await NativeBridge.runInProot(
-          'cd /usr/lib/node_modules/openclaw/node_modules/sharp && '
-          '$nodeCmd install/check 2>/dev/null || '
-          '$nodeCmd $npmCli rebuild sharp --ignore-scripts 2>/dev/null; '
+          '$nodeRun $npmCli rebuild sharp --ignore-scripts 2>/dev/null; '
           'echo sharp_done',
           timeout: 300,
         );
@@ -262,7 +266,7 @@ class BootstrapService {
         message: 'Verifying OpenClaw...',
       ));
       await NativeBridge.runInProot(
-        '$nodeCmd $npmCli list -g openclaw',
+        '$nodeRun $npmCli list -g openclaw',
       );
       onProgress(const SetupState(
         step: SetupStep.installingOpenClaw,
@@ -270,13 +274,7 @@ class BootstrapService {
         message: 'OpenClaw installed',
       ));
 
-      // Step 5: Configure bypass
-      onProgress(const SetupState(
-        step: SetupStep.configuringBypass,
-        progress: 0.0,
-        message: 'Configuring Bionic Bypass...',
-      ));
-      await NativeBridge.installBionicBypass();
+      // Step 5: Bionic Bypass already installed (before node verification)
       onProgress(const SetupState(
         step: SetupStep.configuringBypass,
         progress: 1.0,
