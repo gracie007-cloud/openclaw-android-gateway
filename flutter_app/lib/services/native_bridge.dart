@@ -62,6 +62,10 @@ class NativeBridge {
     return await _channel.invokeMethod('writeResolv');
   }
 
+  static Future<int> extractDebPackages() async {
+    return await _channel.invokeMethod('extractDebPackages');
+  }
+
   static Stream<String> get gatewayLogStream {
     return _eventChannel.receiveBroadcastStream().map((event) => event.toString());
   }

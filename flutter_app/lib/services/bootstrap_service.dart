@@ -130,48 +130,10 @@ class BootstrapService {
         progress: 0.25,
         message: 'Extracting base packages...',
       ));
-      // CRITICAL: On Android 10+ (W^X), subprocess forking inside proot
-      // is broken. dpkg-deb may also fork decompressors internally.
-      // Use ar+tar (shell builtins/single-exec tools) to extract debs.
-      // A .deb is an ar archive containing data.tar.{xz,zst,gz}.
-      await NativeBridge.runInProot(
-        'cd /tmp; '
-        'for f in /var/cache/apt/archives/*.deb; do '
-        '  ar x "\$f" 2>/dev/null; '
-        '  if [ -f data.tar.xz ]; then xz -d data.tar.xz && tar xf data.tar -C / 2>/dev/null; '
-        '  elif [ -f data.tar.zst ]; then zstd -d data.tar.zst -o data.tar 2>/dev/null && tar xf data.tar -C / 2>/dev/null; '
-        '  elif [ -f data.tar.gz ]; then gzip -d data.tar.gz && tar xf data.tar -C / 2>/dev/null; '
-        '  elif [ -f data.tar ]; then tar xf data.tar -C / 2>/dev/null; '
-        '  fi; '
-        '  rm -f data.tar* control.tar* debian-binary _gpgorigin 2>/dev/null; '
-        'done; '
-        'echo extract_done',
-      );
-
-      // Fix permissions on newly extracted binaries
-      await NativeBridge.runInProot(
-        'chmod -R 755 /usr/bin /usr/sbin /bin /sbin 2>/dev/null; '
-        'chmod -R +x /usr/lib/ /var/lib/dpkg/info/ 2>/dev/null; '
-        'echo chmod_done',
-      );
-
-      // Verify curl binary exists after extraction
-      try {
-        await NativeBridge.runInProot(
-          'test -f /usr/bin/curl && echo curl_found',
-        );
-      } catch (e) {
-        // If ar+tar approach failed, try dpkg-deb as fallback with errors visible
-        try {
-          await NativeBridge.runInProot(
-            'dpkg-deb -x /var/cache/apt/archives/curl_*.deb /',
-          );
-        } catch (e2) {
-          throw Exception(
-            'Cannot extract debs. dpkg-deb error: $e2',
-          );
-        }
-      }
+      // Extract .deb files using Java (Apache Commons Compress) to avoid
+      // fork+exec issues in proot on Android 10+. dpkg, dpkg-deb, ar all
+      // fail because subprocess forking is broken in proot.
+      await NativeBridge.extractDebPackages();
 
       onProgress(const SetupState(
         step: SetupStep.installingNode,
@@ -217,20 +179,7 @@ class BootstrapService {
         progress: 0.75,
         message: 'Extracting Node.js packages...',
       ));
-      await NativeBridge.runInProot(
-        'cd /tmp; '
-        'for f in /var/cache/apt/archives/*.deb; do '
-        '  ar x "\$f" 2>/dev/null; '
-        '  if [ -f data.tar.xz ]; then xz -d data.tar.xz && tar xf data.tar -C / 2>/dev/null; '
-        '  elif [ -f data.tar.zst ]; then zstd -d data.tar.zst -o data.tar 2>/dev/null && tar xf data.tar -C / 2>/dev/null; '
-        '  elif [ -f data.tar.gz ]; then gzip -d data.tar.gz && tar xf data.tar -C / 2>/dev/null; '
-        '  elif [ -f data.tar ]; then tar xf data.tar -C / 2>/dev/null; '
-        '  fi; '
-        '  rm -f data.tar* control.tar* debian-binary _gpgorigin 2>/dev/null; '
-        'done; '
-        'chmod -R 755 /usr/bin /usr/sbin /bin /sbin 2>/dev/null; '
-        'echo extract_done',
-      );
+      await NativeBridge.extractDebPackages();
 
       onProgress(const SetupState(
         step: SetupStep.installingNode,

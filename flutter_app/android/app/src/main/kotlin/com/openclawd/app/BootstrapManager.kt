@@ -6,9 +6,12 @@ import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.InputStream
 import java.util.zip.GZIPInputStream
+import org.apache.commons.compress.archivers.ar.ArArchiveInputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
 
 class BootstrapManager(
     private val context: Context,
@@ -238,6 +241,150 @@ class BootstrapManager(
 
         // Clean up tarball
         File(tarPath).delete()
+    }
+
+    /**
+     * Extract all .deb packages from the apt cache into the rootfs.
+     * Uses Java (Apache Commons Compress) to avoid fork+exec issues in proot.
+     * A .deb is an ar archive containing data.tar.{xz,gz,zst}.
+     * Returns the number of packages extracted.
+     */
+    fun extractDebPackages(): Int {
+        val archivesDir = File("$rootfsDir/var/cache/apt/archives")
+        if (!archivesDir.exists()) {
+            throw RuntimeException("No apt archives directory found")
+        }
+
+        val debFiles = archivesDir.listFiles { f -> f.name.endsWith(".deb") }
+            ?: throw RuntimeException("No .deb files found in apt cache")
+
+        if (debFiles.isEmpty()) {
+            throw RuntimeException("No .deb files found in apt cache")
+        }
+
+        var extracted = 0
+        val errors = mutableListOf<String>()
+
+        for (debFile in debFiles) {
+            try {
+                extractSingleDeb(debFile)
+                extracted++
+            } catch (e: Exception) {
+                errors.add("${debFile.name}: ${e.message}")
+            }
+        }
+
+        if (extracted == 0) {
+            throw RuntimeException(
+                "Failed to extract any .deb packages. Errors: ${errors.joinToString("; ")}"
+            )
+        }
+
+        // Fix permissions on newly extracted binaries
+        fixBinPermissions()
+
+        return extracted
+    }
+
+    /**
+     * Extract a single .deb file into the rootfs.
+     * Reads the ar archive, finds data.tar.*, decompresses, and extracts.
+     */
+    private fun extractSingleDeb(debFile: File) {
+        FileInputStream(debFile).use { fis ->
+            BufferedInputStream(fis).use { bis ->
+                ArArchiveInputStream(bis).use { arIn ->
+                    var arEntry = arIn.nextEntry
+                    while (arEntry != null) {
+                        val name = arEntry.name
+                        if (name.startsWith("data.tar")) {
+                            // Wrap in appropriate decompressor
+                            val dataStream: InputStream = when {
+                                name.endsWith(".xz") -> XZCompressorInputStream(arIn)
+                                name.endsWith(".gz") -> GZIPInputStream(arIn)
+                                name.endsWith(".zst") -> {
+                                    // zstd not supported without native lib — skip
+                                    // Most Ubuntu packages use xz or gz
+                                    throw RuntimeException("zstd compression not supported")
+                                }
+                                else -> arIn // plain .tar or unknown
+                            }
+
+                            // Extract data.tar contents into rootfs
+                            TarArchiveInputStream(dataStream).use { tarIn ->
+                                var tarEntry = tarIn.nextEntry
+                                while (tarEntry != null) {
+                                    val entryName = tarEntry.name
+                                        .removePrefix("./")
+                                        .removePrefix("/")
+
+                                    if (entryName.isEmpty()) {
+                                        tarEntry = tarIn.nextEntry
+                                        continue
+                                    }
+
+                                    val outFile = File(rootfsDir, entryName)
+
+                                    when {
+                                        tarEntry.isDirectory -> {
+                                            outFile.mkdirs()
+                                        }
+                                        tarEntry.isSymbolicLink -> {
+                                            try {
+                                                if (outFile.exists()) outFile.delete()
+                                                outFile.parentFile?.mkdirs()
+                                                Os.symlink(tarEntry.linkName, outFile.absolutePath)
+                                            } catch (_: Exception) {}
+                                        }
+                                        tarEntry.isLink -> {
+                                            val target = tarEntry.linkName
+                                                .removePrefix("./")
+                                                .removePrefix("/")
+                                            val targetFile = File(rootfsDir, target)
+                                            outFile.parentFile?.mkdirs()
+                                            try {
+                                                if (targetFile.exists()) {
+                                                    targetFile.copyTo(outFile, overwrite = true)
+                                                    if (targetFile.canExecute()) {
+                                                        outFile.setExecutable(true, false)
+                                                    }
+                                                }
+                                            } catch (_: Exception) {}
+                                        }
+                                        else -> {
+                                            outFile.parentFile?.mkdirs()
+                                            FileOutputStream(outFile).use { fos ->
+                                                val buf = ByteArray(65536)
+                                                var len: Int
+                                                while (tarIn.read(buf).also { len = it } != -1) {
+                                                    fos.write(buf, 0, len)
+                                                }
+                                            }
+                                            outFile.setReadable(true, false)
+                                            outFile.setWritable(true, false)
+                                            val mode = tarEntry.mode
+                                            if (mode and 0b001_001_001 != 0) {
+                                                outFile.setExecutable(true, false)
+                                            }
+                                            // Ensure bin/sbin files are executable
+                                            val path = entryName.lowercase()
+                                            if (path.contains("/bin/") ||
+                                                path.contains("/sbin/")) {
+                                                outFile.setExecutable(true, false)
+                                            }
+                                        }
+                                    }
+
+                                    tarEntry = tarIn.nextEntry
+                                }
+                            }
+                            return // Found and processed data.tar, done
+                        }
+                        arEntry = arIn.nextEntry
+                    }
+                }
+            }
+        }
     }
 
     /**

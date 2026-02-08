@@ -121,6 +121,16 @@ class MainActivity : FlutterActivity() {
                         }
                     }.start()
                 }
+                "extractDebPackages" -> {
+                    Thread {
+                        try {
+                            val count = bootstrapManager.extractDebPackages()
+                            runOnUiThread { result.success(count) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("DEB_EXTRACT_ERROR", e.message, null) }
+                        }
+                    }.start()
+                }
                 else -> {
                     result.notImplemented()
                 }
