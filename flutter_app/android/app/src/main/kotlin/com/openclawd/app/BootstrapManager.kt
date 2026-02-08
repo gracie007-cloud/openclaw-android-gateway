@@ -418,12 +418,24 @@ class BootstrapManager(
         )
 
         // 3. Ensure essential directories exist
+        // mkdir syscall is broken inside proot on Android 10+.
+        // Pre-create ALL directories that tools need at runtime.
         listOf(
             "$rootfsDir/etc/ssl/certs",
             "$rootfsDir/usr/share/keyrings",
             "$rootfsDir/etc/apt/sources.list.d",
             "$rootfsDir/var/lib/dpkg/updates",
             "$rootfsDir/var/lib/dpkg/triggers",
+            // npm cache directories (npm can't mkdir inside proot)
+            "$rootfsDir/tmp/npm-cache/_cacache/tmp",
+            "$rootfsDir/tmp/npm-cache/_cacache/content-v2",
+            "$rootfsDir/tmp/npm-cache/_cacache/index-v5",
+            "$rootfsDir/tmp/npm-cache/_logs",
+            // Node.js / npm working directories
+            "$rootfsDir/root/.npm",
+            "$rootfsDir/root/.config",
+            "$rootfsDir/usr/local/lib/node_modules",
+            "$rootfsDir/usr/local/bin",
         ).forEach { File(it).mkdirs() }
 
         // 4. Ensure /etc/machine-id exists (dpkg triggers and systemd utils need it)
