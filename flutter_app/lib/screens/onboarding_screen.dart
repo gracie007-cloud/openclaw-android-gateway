@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
 import 'package:flutter_pty/flutter_pty.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../services/terminal_service.dart';
 import '../services/preferences_service.dart';
 import '../widgets/terminal_toolbar.dart';
@@ -23,6 +25,7 @@ class OnboardingScreen extends StatefulWidget {
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
   late final Terminal _terminal;
+  late final TerminalController _controller;
   Pty? _pty;
   bool _loading = true;
   bool _finished = false;
@@ -40,6 +43,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   void initState() {
     super.initState();
     _terminal = Terminal(maxLines: 10000);
+    _controller = TerminalController();
     _startOnboarding();
   }
 
@@ -104,8 +108,104 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   @override
   void dispose() {
+    _controller.dispose();
     _pty?.kill();
     super.dispose();
+  }
+
+  void _copySelection() {
+    final text = _terminal.selectedText;
+    if (text != null && text.isNotEmpty) {
+      Clipboard.setData(ClipboardData(text: text));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Copied to clipboard'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    }
+  }
+
+  Future<void> _paste() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (data?.text != null && data!.text!.isNotEmpty) {
+      _pty?.write(utf8.encode(data.text!));
+    }
+  }
+
+  void _handleTap(TapUpDetails details, CellOffset offset) {
+    final line = _terminal.buffer.lines.length > offset.y
+        ? _getLineText(offset.y)
+        : '';
+    if (line.isEmpty) return;
+
+    final urlPattern = RegExp(
+      r'https?://[^\s<>\[\]"' "'" r'\)]+',
+      caseSensitive: false,
+    );
+    for (final match in urlPattern.allMatches(line)) {
+      final url = match.group(0)!;
+      if (offset.x >= match.start && offset.x <= match.end) {
+        _openUrl(url);
+        return;
+      }
+    }
+  }
+
+  String _getLineText(int row) {
+    try {
+      final line = _terminal.buffer.lines[row];
+      final sb = StringBuffer();
+      for (int i = 0; i < line.length; i++) {
+        final char = line.cellGetContent(i);
+        if (char != 0) {
+          sb.writeCharCode(char);
+        }
+      }
+      return sb.toString();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  Future<void> _openUrl(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+
+    final shouldOpen = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Open Link'),
+        content: Text(url),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: url));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Link copied'),
+                  duration: Duration(seconds: 1),
+                ),
+              );
+              Navigator.pop(ctx, false);
+            },
+            child: const Text('Copy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Open'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldOpen == true) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
   }
 
   Future<void> _goToDashboard() async {
@@ -134,6 +234,18 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 onPressed: () => Navigator.of(context).pop(),
               ),
         automaticallyImplyLeading: false,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.copy),
+            tooltip: 'Copy',
+            onPressed: _copySelection,
+          ),
+          IconButton(
+            icon: const Icon(Icons.paste),
+            tooltip: 'Paste',
+            onPressed: _paste,
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -191,11 +303,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             Expanded(
               child: TerminalView(
                 _terminal,
+                controller: _controller,
                 textStyle: TerminalStyle(
                   fontSize: 14,
                   fontFamily: 'monospace',
                   fontFamilyFallback: _fontFallback,
                 ),
+                onTapUp: _handleTap,
               ),
             ),
             TerminalToolbar(pty: _pty),
