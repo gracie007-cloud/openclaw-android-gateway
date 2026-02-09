@@ -86,8 +86,22 @@ class _TerminalScreenState extends State<TerminalScreen> {
   }
 
   void _copySelection() {
-    final text = _terminal.selectedText;
-    if (text != null && text.isNotEmpty) {
+    final selection = _controller.selection;
+    if (selection == null || selection.isCollapsed) return;
+
+    final range = selection.normalized;
+    final sb = StringBuffer();
+    for (int y = range.begin.y; y <= range.end.y; y++) {
+      if (y >= _terminal.buffer.lines.length) break;
+      final line = _terminal.buffer.lines[y];
+      final from = (y == range.begin.y) ? range.begin.x : 0;
+      final to = (y == range.end.y) ? range.end.x : null;
+      sb.write(line.getText(from, to));
+      if (y < range.end.y) sb.writeln();
+    }
+
+    final text = sb.toString();
+    if (text.isNotEmpty) {
       Clipboard.setData(ClipboardData(text: text));
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -133,7 +147,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
       final line = _terminal.buffer.lines[row];
       final sb = StringBuffer();
       for (int i = 0; i < line.length; i++) {
-        final char = line.cellGetContent(i);
+        final char = line.getCodePoint(i);
         if (char != 0) {
           sb.writeCharCode(char);
         }
