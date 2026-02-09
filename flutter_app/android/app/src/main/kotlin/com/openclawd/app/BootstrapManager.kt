@@ -512,6 +512,7 @@ class BootstrapManager(
             "$rootfsDir/usr/local/sbin",
             "$rootfsDir/usr/lib/apt/methods",
             "$rootfsDir/usr/lib/dpkg",
+            "$rootfsDir/usr/lib/git-core",     // git sub-commands (git-remote-https, etc.)
             "$rootfsDir/usr/libexec",
             "$rootfsDir/var/lib/dpkg/info",    // dpkg maintainer scripts (preinst/postinst/prerm/postrm)
             "$rootfsDir/usr/share/debconf",    // debconf frontend scripts
@@ -1119,6 +1120,19 @@ require('/root/.openclawd/proot-compat.js');
 """.trimIndent()
 
         File(bypassDir, "bionic-bypass.js").writeText(bypassContent)
+
+        // 5. Git config — write .gitconfig directly to rootfs to avoid shell
+        //    quoting issues when running `git config` inside proot via bash -c.
+        //    Rewrites SSH URLs to HTTPS (no SSH keys in proot).
+        //    npm dependencies like @whiskeysockets/libsignal-node use git+ssh.
+        val gitConfig = File("$rootfsDir/root/.gitconfig")
+        gitConfig.writeText(
+            "[url \"https://github.com/\"]\n" +
+            "\tinsteadOf = ssh://git@github.com/\n" +
+            "\tinsteadOf = git@github.com:\n" +
+            "[advice]\n" +
+            "\tdetachedHead = false\n"
+        )
 
         // Patch .bashrc
         val bashrc = File("$rootfsDir/root/.bashrc")

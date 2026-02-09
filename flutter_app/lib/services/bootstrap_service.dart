@@ -137,6 +137,15 @@ class BootstrapService {
       ));
       await NativeBridge.extractDebPackages();
 
+      // Fix permissions on newly extracted deb binaries (git-core, etc.)
+      // Java-side fixBinPermissions covers this too, but belt-and-suspenders
+      // inside proot ensures proot's view of permissions is correct.
+      await NativeBridge.runInProot(
+        'chmod -R 755 /usr/lib/git-core/ 2>/dev/null; '
+        'chmod -R 755 /usr/bin /usr/sbin 2>/dev/null; '
+        'echo deb_perms_fixed',
+      );
+
       onProgress(const SetupState(
         step: SetupStep.installingNode,
         progress: 0.22,
@@ -152,19 +161,9 @@ class BootstrapService {
         );
       }
 
-      // Configure git to use HTTPS instead of SSH (no SSH keys in proot).
-      // npm uses ssh://git@github.com/... for git deps by default.
-      onProgress(const SetupState(
-        step: SetupStep.installingNode,
-        progress: 0.25,
-        message: 'Configuring git...',
-      ));
-      await NativeBridge.runInProot(
-        'git config --global url."https://github.com/".insteadOf "ssh://git@github.com/" && '
-        'git config --global url."https://github.com/".insteadOf "git@github.com:" && '
-        'git config --global advice.detachedHead false && '
-        'echo git_configured',
-      );
+      // Git config (.gitconfig) is written by installBionicBypass() on the
+      // Java side — directly to $rootfsDir/root/.gitconfig — to avoid shell
+      // quoting issues with bash -c. It rewrites SSH→HTTPS for npm git deps.
 
       // --- Install Node.js via binary tarball ---
       // Download directly from nodejs.org (bypasses curl/gpg/NodeSource
