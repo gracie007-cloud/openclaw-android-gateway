@@ -84,7 +84,7 @@ class _SplashScreenState extends State<SplashScreen> {
             ),
             const SizedBox(height: 4),
             Text(
-              'by ${AppConstants.authorName}',
+              'by ${AppConstants.authorName} | ${AppConstants.orgName}',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),

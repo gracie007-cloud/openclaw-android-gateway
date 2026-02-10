@@ -172,6 +172,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: Text(AppConstants.license),
                   leading: Icon(Icons.description),
                 ),
+                const Divider(),
+                _sectionHeader(theme, AppConstants.orgName),
+                ListTile(
+                  title: const Text('Instagram'),
+                  subtitle: const Text('@nexgenxplorer_nxg'),
+                  leading: const Icon(Icons.camera_alt),
+                  trailing: const Icon(Icons.open_in_new, size: 18),
+                  onTap: () => launchUrl(
+                    Uri.parse(AppConstants.instagramUrl),
+                    mode: LaunchMode.externalApplication,
+                  ),
+                ),
+                ListTile(
+                  title: const Text('YouTube'),
+                  subtitle: const Text('@nexgenxplorer'),
+                  leading: const Icon(Icons.play_circle_fill),
+                  trailing: const Icon(Icons.open_in_new, size: 18),
+                  onTap: () => launchUrl(
+                    Uri.parse(AppConstants.youtubeUrl),
+                    mode: LaunchMode.externalApplication,
+                  ),
+                ),
+                ListTile(
+                  title: const Text('Play Store'),
+                  subtitle: const Text('NextGenX Apps'),
+                  leading: const Icon(Icons.shop),
+                  trailing: const Icon(Icons.open_in_new, size: 18),
+                  onTap: () => launchUrl(
+                    Uri.parse(AppConstants.playStoreUrl),
+                    mode: LaunchMode.externalApplication,
+                  ),
+                ),
+                ListTile(
+                  title: const Text('Email'),
+                  subtitle: const Text(AppConstants.orgEmail),
+                  leading: const Icon(Icons.email_outlined),
+                  trailing: const Icon(Icons.open_in_new, size: 18),
+                  onTap: () => launchUrl(
+                    Uri.parse('mailto:${AppConstants.orgEmail}'),
+                  ),
+                ),
               ],
             ),
     );

@@ -1,6 +1,6 @@
 class AppConstants {
   static const String appName = 'OpenClaw';
-  static const String version = '1.1.0';
+  static const String version = '2.0.0';
   static const String packageName = 'com.nxg.openclawproot';
 
   /// Matches ANSI escape sequences (e.g. color codes in terminal output).
@@ -10,6 +10,13 @@ class AppConstants {
   static const String authorEmail = 'mithungowda.b7411@gmail.com';
   static const String githubUrl = 'https://github.com/mithun50/openclawd-termux';
   static const String license = 'MIT';
+
+  // NextGenX
+  static const String orgName = 'NextGenX';
+  static const String orgEmail = 'nxgextra@gmail.com';
+  static const String instagramUrl = 'https://www.instagram.com/nexgenxplorer_nxg';
+  static const String youtubeUrl = 'https://youtube.com/@nexgenxplorer?si=UG-wBC8UIyeT4bbw';
+  static const String playStoreUrl = 'https://play.google.com/store/apps/dev?id=8262374975871504599';
 
   static const String gatewayHost = '127.0.0.1';
   static const int gatewayPort = 18789;

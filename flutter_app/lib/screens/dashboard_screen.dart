@@ -107,7 +107,7 @@ class DashboardScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    'by ${AppConstants.authorName}',
+                    'by ${AppConstants.authorName} | ${AppConstants.orgName}',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
