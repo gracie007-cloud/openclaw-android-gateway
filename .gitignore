@@ -6,3 +6,8 @@ node_modules/
 *.tgz
 coverage/
 .nyc_output/
+
+# Android signing
+flutter_app/android/key.properties
+*.jks
+*.keystore

@@ -1,4 +1,4 @@
-name: Build Flutter APK
+name: Build Flutter APK & AAB
 
 on:
   push:
@@ -19,7 +19,7 @@ on:
 
 jobs:
   build:
-    name: Build APK
+    name: Build APK & AAB
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -57,6 +57,22 @@ jobs:
             flutter_app/.dart_tool
           key: pub-${{ runner.os }}-${{ hashFiles('flutter_app/pubspec.lock') }}
           restore-keys: pub-${{ runner.os }}-
+
+      - name: Setup signing
+        if: env.KEYSTORE_BASE64 != ''
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > "${{ github.workspace }}/release.jks"
+          cat > flutter_app/android/key.properties <<EOF
+          storePassword=$KEYSTORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          storeFile=${{ github.workspace }}/release.jks
+          EOF
 
       - name: Fetch PRoot binaries
         run: bash scripts/fetch-proot-binaries.sh
@@ -97,7 +113,11 @@ jobs:
         working-directory: flutter_app
         run: flutter build apk --release --split-per-abi
 
-      - name: Rename and collect APKs
+      - name: Build AAB (App Bundle)
+        working-directory: flutter_app
+        run: flutter build appbundle --release
+
+      - name: Rename and collect artifacts
         id: apks
         run: |
           VERSION=$(grep '^version:' flutter_app/pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)
@@ -107,24 +127,37 @@ jobs:
 
           # Fat APK
           cp flutter_app/build/app/outputs/flutter-apk/app-release.apk \
-             "artifacts/OpenClawd-v${VERSION}-universal.apk"
+             "artifacts/OpenClaw-v${VERSION}-universal.apk"
 
           # Per-ABI APKs
           for abi in arm64-v8a armeabi-v7a x86_64; do
             SRC="flutter_app/build/app/outputs/flutter-apk/app-${abi}-release.apk"
             if [ -f "$SRC" ]; then
-              cp "$SRC" "artifacts/OpenClawd-v${VERSION}-${abi}.apk"
+              cp "$SRC" "artifacts/OpenClaw-v${VERSION}-${abi}.apk"
             fi
           done
 
-          echo "Built APKs:"
+          # AAB
+          AAB="flutter_app/build/app/outputs/bundle/release/app-release.aab"
+          if [ -f "$AAB" ]; then
+            cp "$AAB" "artifacts/OpenClaw-v${VERSION}.aab"
+          fi
+
+          echo "Built artifacts:"
           ls -lh artifacts/
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: openclawd-apks
+          name: openclaw-apks
           path: artifacts/*.apk
+          retention-days: 30
+
+      - name: Upload AAB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-aab
+          path: artifacts/*.aab
           retention-days: 30
 
   release:
@@ -143,7 +176,13 @@ jobs:
       - name: Download APK artifacts
         uses: actions/download-artifact@v4
         with:
-          name: openclawd-apks
+          name: openclaw-apks
+          path: artifacts
+
+      - name: Download AAB artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: openclaw-aab
           path: artifacts
 
       - name: Get version
@@ -153,7 +192,7 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
           # Check if this tag already exists
-          if git ls-remote --tags origin "refs/tags/v${VERSION}-apk" | grep -q .; then
+          if git ls-remote --tags origin "refs/tags/v${VERSION}" | grep -q .; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
@@ -163,20 +202,21 @@ jobs:
         if: steps.version.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}-apk
-          name: OpenClawd APK v${{ steps.version.outputs.version }}
+          tag_name: v${{ steps.version.outputs.version }}
+          name: OpenClaw v${{ steps.version.outputs.version }}
           body: |
-            ## OpenClawd Android APK v${{ steps.version.outputs.version }}
+            ## OpenClaw Android v${{ steps.version.outputs.version }}
 
             Standalone Android app — no Termux required.
 
             ### Downloads
             | File | Description |
             |------|-------------|
-            | `OpenClawd-v${{ steps.version.outputs.version }}-arm64-v8a.apk` | Most modern Android phones (recommended) |
-            | `OpenClawd-v${{ steps.version.outputs.version }}-armeabi-v7a.apk` | Older 32-bit ARM devices |
-            | `OpenClawd-v${{ steps.version.outputs.version }}-x86_64.apk` | Emulators / x86 devices |
-            | `OpenClawd-v${{ steps.version.outputs.version }}-universal.apk` | All architectures (larger) |
+            | `OpenClaw-v${{ steps.version.outputs.version }}-arm64-v8a.apk` | Most modern Android phones (recommended) |
+            | `OpenClaw-v${{ steps.version.outputs.version }}-armeabi-v7a.apk` | Older 32-bit ARM devices |
+            | `OpenClaw-v${{ steps.version.outputs.version }}-x86_64.apk` | Emulators / x86 devices |
+            | `OpenClaw-v${{ steps.version.outputs.version }}-universal.apk` | All architectures (larger) |
+            | `OpenClaw-v${{ steps.version.outputs.version }}.aab` | Android App Bundle (Play Store) |
 
             ### First Run
             1. Install the APK
@@ -188,6 +228,6 @@ jobs:
             - Android 7.0+ (API 24)
             - ~500MB free storage for initial setup
             - Internet connection for first-time setup
-          files: artifacts/*.apk
+          files: artifacts/*
           draft: false
           prerelease: false
