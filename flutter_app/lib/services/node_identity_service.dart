@@ -53,20 +53,13 @@ class NodeIdentityService {
     await prefs.setString(_keyDeviceId, _deviceId);
   }
 
-  /// Sign a challenge nonce (hex string) with Ed25519 private key.
+  /// Sign a challenge nonce with Ed25519 private key.
+  /// The nonce is signed as raw UTF-8 bytes (gateway sends UUID-format nonces).
   /// Returns base64-encoded signature.
-  Future<String> signChallenge(String nonceHex) async {
-    final nonceBytes = _hexToBytes(nonceHex);
+  Future<String> signChallenge(String nonce) async {
+    final nonceBytes = utf8.encode(nonce);
     final algorithm = Ed25519();
     final signature = await algorithm.sign(nonceBytes, keyPair: _keyPair);
     return base64Encode(signature.bytes);
-  }
-
-  static Uint8List _hexToBytes(String hex) {
-    final result = Uint8List(hex.length ~/ 2);
-    for (var i = 0; i < hex.length; i += 2) {
-      result[i ~/ 2] = int.parse(hex.substring(i, i + 2), radix: 16);
-    }
-    return result;
   }
 }
