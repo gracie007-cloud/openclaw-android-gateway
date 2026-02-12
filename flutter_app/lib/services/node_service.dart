@@ -216,7 +216,9 @@ class NodeService {
       },
     });
 
+    _log('[NODE] Connect frame caps=$caps');
     final response = await _ws.sendRequest(connectFrame);
+    _log('[NODE] Connect response ok=${response.isOk} payload keys=${response.payload?.keys.toList()}');
 
     if (response.isOk) {
       // hello-ok
