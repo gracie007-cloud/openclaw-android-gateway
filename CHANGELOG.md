@@ -1,5 +1,47 @@
 # Changelog
 
+## v1.7.0 — Clean Modern UI Redesign
+
+> Requires Android 10+ (API 29)
+
+### UI Overhaul
+
+- **New Color System** — Replaced default Material 3 purple with a professional black/white palette and red (#DC2626) accent, inspired by Linear/Vercel design language
+- **Inter Typography** — Added Google Fonts Inter across the entire app for a clean, modern feel
+- **AppColors Class** — Centralized color constants for consistent theming (dark bg, surfaces, borders, status colors)
+- **Dark Mode** — Near-black backgrounds (#0A0A0A), subtle surface (#121212), bordered cards
+- **Light Mode** — Clean white backgrounds, light borders (#E5E5E5), bordered cards
+
+### Component Redesign
+
+- **Zero-Elevation Cards** — All cards now use 1px borders with 12px radius instead of drop shadows
+- **Pill Status Badges** — Gateway and Node controls show pill-shaped badges (icon + label) instead of 12px status dots
+- **Monochrome Dashboard** — Removed rainbow icon colors from quick action cards; all icons use neutral muted tones
+- **Uppercase Section Headers** — Settings, Node, and Setup screens use letterspaced muted grey headers
+- **Red Accent Buttons** — Primary actions (Start Gateway, Enable Node, Install) use red filled buttons; destructive/secondary actions use outlined buttons
+- **Terminal Toolbar** — Aligned colors to new palette; CTRL/ALT active state uses red accent; bumped border radius
+
+### Splash Screen
+
+- **Fade-In Animation** — 800ms fade-in on launch with easeOut curve
+- **App Icon Branding** — Uses ic_launcher.png instead of generic cloud icon
+- **Inter Bold Wordmark** — "OpenClaw" displayed in Inter weight 800 with letter-spacing
+
+### Polish
+
+- **Log Colors** — INFO lines use muted grey (not red); WARN uses amber instead of orange
+- **Installed Badges** — Package screens use consistent green (#22C55E) for "Installed" badges
+- **Capability Icons** — Node screen capabilities use muted color instead of primary red
+- **Input Focus** — Text fields highlight with red border on focus
+- **Switches** — Red thumb when active, grey when inactive
+- **Progress Indicators** — All use red accent color
+
+### CI
+
+- Removed OpenClaw Node app build from workflow (gateway-only CI now)
+
+---
+
 ## v1.6.1 — Node Capabilities & Background Resilience
 
 > Requires Android 10+ (API 29)
