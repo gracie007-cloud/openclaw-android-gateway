@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../constants.dart';
 import '../models/gateway_state.dart';
@@ -75,6 +76,37 @@ class GatewayService {
     });
   }
 
+  /// Write gateway config that allows all node commands before startup.
+  /// This ensures the gateway's node-command-policy doesn't block commands
+  /// that the Flutter node declares as capabilities.
+  Future<void> _writeNodeAllowConfig() async {
+    const allowCommands = [
+      'camera.snap', 'camera.clip', 'camera.list',
+      'canvas.navigate', 'canvas.eval', 'canvas.snapshot',
+      'flash.on', 'flash.off', 'flash.toggle', 'flash.status',
+      'location.get',
+      'screen.record',
+      'sensor.read', 'sensor.list',
+      'haptic.vibrate',
+    ];
+    final config = jsonEncode({
+      'gateway': {
+        'nodes': {
+          'allowCommands': allowCommands,
+        },
+      },
+    });
+    try {
+      await NativeBridge.runInProot(
+        'mkdir -p /root/.openclaw/config && '
+        "cat > /root/.openclaw/config/gateway.json << 'GWEOF'\n$config\nGWEOF",
+        timeout: 10,
+      );
+    } catch (_) {
+      // Non-fatal: gateway may still work with default policy
+    }
+  }
+
   Future<void> start() async {
     final prefs = PreferencesService();
     await prefs.init();
@@ -88,6 +120,7 @@ class GatewayService {
     ));
 
     try {
+      await _writeNodeAllowConfig();
       await NativeBridge.startGateway();
       _subscribeLogs();
       _startHealthCheck();
