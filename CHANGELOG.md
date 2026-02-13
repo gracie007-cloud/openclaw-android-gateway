@@ -2,6 +2,8 @@
 
 ## v1.6.1 — Node Capabilities & Background Resilience
 
+> Requires Android 10+ (API 29)
+
 ### New Features
 
 - **7 Node Capabilities (15 commands)** — Camera, Flash, Location, Screen, Sensor, Haptic, and Canvas now fully registered and exposed to the AI via WebSocket node protocol

@@ -331,7 +331,7 @@ jobs:
             4. Access the web dashboard at `http://127.0.0.1:18789`
 
             ### Requirements
-            - Android 7.0+ (API 24)
+            - Android 10+ (API 29)
             - ~500MB free storage for initial setup
             - Internet connection for first-time setup
           files: artifacts/*
