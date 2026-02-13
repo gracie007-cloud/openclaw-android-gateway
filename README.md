@@ -1,6 +1,6 @@
 # OpenClaw
 
-[![Download APK](https://img.shields.io/badge/Download-APK-green?style=for-the-badge&logo=android)](https://github.com/mithun50/openclaw-termux/releases/download/v1.5.5/OpenClaw-v1.5.5-universal.apk)
+[![Download APK](https://img.shields.io/badge/Download-APK-green?style=for-the-badge&logo=android)](https://github.com/mithun50/openclaw-termux/releases/download/v1.6.0/OpenClaw-v1.6.0-universal.apk)
 [![Build Flutter APK & AAB](https://github.com/mithun50/openclaw-termux/actions/workflows/flutter-build.yml/badge.svg)](https://github.com/mithun50/openclaw-termux/actions/workflows/flutter-build.yml)
 [![npm version](https://img.shields.io/npm/v/openclaw-termux?color=blue&label=npm)](https://www.npmjs.com/package/openclaw-termux)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -56,6 +56,7 @@ OpenClaw brings the [OpenClaw](https://github.com/anthropics/openclaw) AI gatewa
 - **One-Tap Setup** — Downloads Ubuntu rootfs, Node.js 22, and OpenClaw automatically
 - **Built-in Terminal** — Full terminal emulator with extra keys toolbar, copy/paste, clickable URLs
 - **Gateway Controls** — Start/stop gateway with status indicator and health checks
+- **Node Device Capabilities** — 7 capabilities (15 commands) exposed to AI via WebSocket node protocol
 - **Token URL Display** — Captures auth token from onboarding, shows it with a copy button
 - **Web Dashboard** — Embedded WebView loads the dashboard with authentication token
 - **View Logs** — Real-time gateway log viewer with search/filter
@@ -78,6 +79,22 @@ These are accessible from:
 - **Setup Wizard** — Package cards appear after setup completes
 - **Dashboard** — "Packages" card in Quick Actions
 - **Settings** — Shows installation status under System Info
+
+### Node Device Capabilities
+
+The Flutter app connects to the gateway as a **node**, exposing Android hardware to the AI. Permissions are requested proactively when the node is enabled.
+
+| Capability | Commands | Permission |
+|------------|----------|------------|
+| **Camera** | `camera.snap`, `camera.clip`, `camera.list` | Camera |
+| **Canvas** | `canvas.navigate`, `canvas.eval`, `canvas.snapshot` | None (not implemented) |
+| **Flash** | `flash.on`, `flash.off`, `flash.toggle`, `flash.status` | Camera (torch) |
+| **Location** | `location.get` | Location |
+| **Screen** | `screen.record` | MediaProjection consent |
+| **Sensor** | `sensor.read`, `sensor.list` | Body Sensors |
+| **Haptic** | `haptic.vibrate` | None |
+
+The gateway's `openclaw.json` is automatically patched before startup to clear `denyCommands` and set `allowCommands` for all 15 commands.
 
 ### Termux CLI
 - **One-Command Setup** — Installs proot-distro, Ubuntu, Node.js 22, and OpenClaw
@@ -162,29 +179,36 @@ openclawx gateway --verbose
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────┐
-│              Flutter App (Dart)               │
-│  ┌──────────┐ ┌──────────┐ ┌──────────────┐  │
-│  │ Terminal  │ │ Gateway  │ │ Web Dashboard│  │
-│  │ Emulator  │ │ Controls │ │   (WebView)  │  │
-│  └─────┬────┘ └─────┬────┘ └──────┬───────┘  │
-│        │            │             │           │
-│  ┌─────┴────────────┴─────────────┴────────┐  │
-│  │         Native Bridge (Kotlin)          │  │
-│  └─────────────────┬───────────────────────┘  │
-└────────────────────┼─────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│                Flutter App (Dart)                  │
+│  ┌──────────┐ ┌──────────┐ ┌──────────────┐       │
+│  │ Terminal  │ │ Gateway  │ │ Web Dashboard│       │
+│  │ Emulator  │ │ Controls │ │   (WebView)  │       │
+│  └─────┬────┘ └─────┬────┘ └──────┬───────┘       │
+│        │            │             │                │
+│  ┌─────┴────────────┴─────────────┴─────────────┐  │
+│  │           Native Bridge (Kotlin)             │  │
+│  └─────────────────┬────────────────────────────┘  │
+│                    │                               │
+│  ┌─────────────────┴────────────────────────────┐  │
+│  │         Node Provider (WebSocket)            │  │
+│  │  Camera · Flash · Location · Screen          │  │
+│  │  Sensor · Haptic · Canvas                    │  │
+│  └─────────────────┬────────────────────────────┘  │
+└────────────────────┼──────────────────────────────┘
                      │
-┌────────────────────┼─────────────────────────┐
-│  proot-distro      │          Ubuntu          │
-│  ┌─────────────────┴──────────────────────┐   │
-│  │   Node.js 22 + Bionic Bypass           │   │
-│  │   ┌─────────────────────────────────┐  │   │
-│  │   │  OpenClaw AI Gateway            │  │   │
-│  │   │  http://localhost:18789         │  │   │
-│  │   └─────────────────────────────────┘  │   │
-│  │   Optional: Go, Homebrew              │   │
-│  └────────────────────────────────────────┘   │
-└───────────────────────────────────────────────┘
+┌────────────────────┼──────────────────────────────┐
+│  proot-distro      │              Ubuntu          │
+│  ┌─────────────────┴──────────────────────────┐   │
+│  │   Node.js 22 + Bionic Bypass               │   │
+│  │   ┌─────────────────────────────────────┐  │   │
+│  │   │  OpenClaw AI Gateway                │  │   │
+│  │   │  http://localhost:18789             │  │   │
+│  │   │  ← Node WS: 15 device commands     │  │   │
+│  │   └─────────────────────────────────────┘  │   │
+│  │   Optional: Go, Homebrew                  │   │
+│  └────────────────────────────────────────────┘   │
+└───────────────────────────────────────────────────┘
 ```
 
 ### Flutter App Structure
@@ -195,10 +219,13 @@ flutter_app/lib/
 ├── constants.dart             # App constants, URLs, author info
 ├── models/
 │   ├── gateway_state.dart     # Gateway status, logs, token URL
+│   ├── node_state.dart        # Node connection status
+│   ├── node_frame.dart        # WebSocket frame model (req/res/event)
 │   ├── setup_state.dart       # Setup wizard progress
 │   └── optional_package.dart  # Optional package metadata (Go, Homebrew)
 ├── providers/
 │   ├── gateway_provider.dart  # Gateway state management
+│   ├── node_provider.dart     # Node capabilities + permission management
 │   └── setup_provider.dart    # Setup state management
 ├── screens/
 │   ├── splash_screen.dart     # Launch screen with routing
@@ -213,11 +240,23 @@ flutter_app/lib/
 │   └── settings_screen.dart        # App settings and about
 ├── services/
 │   ├── native_bridge.dart     # Kotlin platform channel bridge
-│   ├── gateway_service.dart   # Gateway lifecycle and health checks
+│   ├── gateway_service.dart   # Gateway lifecycle, health checks, config patching
+│   ├── node_service.dart      # Node WebSocket connection + invoke handling
+│   ├── node_ws_service.dart   # Raw WebSocket transport
+│   ├── node_identity_service.dart # Device identity + crypto signing
 │   ├── terminal_service.dart  # proot shell configuration
 │   ├── bootstrap_service.dart # Environment setup orchestration
 │   ├── package_service.dart   # Optional package status checking
-│   └── preferences_service.dart # Persistent settings (token URL, etc.)
+│   ├── preferences_service.dart # Persistent settings (token URL, etc.)
+│   └── capabilities/
+│       ├── capability_handler.dart   # Base class with permission handling
+│       ├── camera_capability.dart    # Photo/video capture
+│       ├── canvas_capability.dart    # WebView stub (NOT_IMPLEMENTED)
+│       ├── flash_capability.dart     # Torch on/off/toggle
+│       ├── location_capability.dart  # GPS with timeout + fallback
+│       ├── screen_capability.dart    # Screen recording via MediaProjection
+│       ├── sensor_capability.dart    # Accelerometer, gyroscope, etc.
+│       └── vibration_capability.dart # Haptic feedback
 └── widgets/
     ├── gateway_controls.dart  # Start/stop, URL display, copy button
     ├── terminal_toolbar.dart  # Extra keys (Tab, Ctrl, Esc, arrows)

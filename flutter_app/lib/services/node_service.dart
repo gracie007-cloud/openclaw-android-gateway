@@ -198,7 +198,7 @@ class NodeService {
       'maxProtocol': 3,
       'client': {
         'id': clientId,
-        'displayName': 'OpenClaw Termux',
+        'displayName': 'OpenClawX Node',
         'version': AppConstants.version,
         'platform': 'android',
         'deviceFamily': 'Android',
