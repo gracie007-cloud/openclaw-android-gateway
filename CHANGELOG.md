@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.7.2 — Setup Fix
+
+### Bug Fixes
+
+- **node-gyp Python Error** — Fixed `PlatformException(PROOT_ERROR)` during setup caused by npm's bundled node-gyp failing to find Python. Now installs `python3`, `make`, and `g++` in the rootfs so native addon compilation works properly
+- **tzdata Interactive Prompt** — Fixed setup hanging on continent/timezone selection by pre-configuring timezone to UTC before installing python3
+- **proot-compat Spawn Mock** — Removed `node-gyp` and `make` from the mocked side-effect command list since real build tools are now installed
+
+---
+
 ## v1.7.1 — Background Persistence & Camera Fix
 
 > Requires Android 10+ (API 29)
