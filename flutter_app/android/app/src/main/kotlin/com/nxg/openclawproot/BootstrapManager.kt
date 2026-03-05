@@ -1213,10 +1213,41 @@ require('/root/.openclaw/proot-compat.js');
     }
 
     fun writeResolvConf() {
-        val configDir = File(this.configDir)
-        configDir.mkdirs()
+        val content = "nameserver 8.8.8.8\nnameserver 8.8.4.4\n"
+        // Try context.filesDir first (Android-guaranteed), fall back to
+        // string-based configDir. Always call mkdirs() unconditionally. (#40)
+        try {
+            val dir = File(context.filesDir, "config")
+            dir.mkdirs()
+            File(dir, "resolv.conf").writeText(content)
+        } catch (_: Exception) {
+            // Fallback: use the string-based path
+            File(configDir).mkdirs()
+            File(configDir, "resolv.conf").writeText(content)
+        }
 
-        File("$configDir/resolv.conf").writeText("nameserver 8.8.8.8\nnameserver 8.8.4.4\n")
+        // Also write directly into rootfs /etc/resolv.conf so DNS works
+        // even if the bind-mount fails or hasn't been set up yet (#40).
+        try {
+            val rootfsResolv = File(rootfsDir, "etc/resolv.conf")
+            if (!rootfsResolv.exists() || rootfsResolv.length() == 0L) {
+                rootfsResolv.parentFile?.mkdirs()
+                rootfsResolv.writeText(content)
+            }
+        } catch (_: Exception) {}
+    }
+
+    /** Read a file from inside the rootfs (e.g. /root/.openclaw/openclaw.json). */
+    fun readRootfsFile(path: String): String? {
+        val file = File("$rootfsDir/$path")
+        return if (file.exists()) file.readText() else null
+    }
+
+    /** Write content to a file inside the rootfs, creating parent dirs as needed. */
+    fun writeRootfsFile(path: String, content: String) {
+        val file = File("$rootfsDir/$path")
+        file.parentFile?.mkdirs()
+        file.writeText(content)
     }
 
     /**

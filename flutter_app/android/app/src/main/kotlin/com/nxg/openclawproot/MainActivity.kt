@@ -17,6 +17,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import android.app.Activity
 import android.content.Context
+import android.os.Environment
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -38,6 +39,7 @@ class MainActivity : FlutterActivity() {
     private lateinit var processManager: ProcessManager
     private var screenCaptureResult: MethodChannel.Result? = null
     private var screenCaptureDurationMs: Long = 5000L
+    private var setupDone = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -47,6 +49,16 @@ class MainActivity : FlutterActivity() {
 
         bootstrapManager = BootstrapManager(applicationContext, filesDir, nativeLibDir)
         processManager = ProcessManager(filesDir, nativeLibDir)
+
+        // Ensure directories and resolv.conf exist on every app start.
+        // Android may clear filesDir during APK update (#40).
+        if (!setupDone) {
+            setupDone = true
+            Thread {
+                try { bootstrapManager.setupDirectories() } catch (_: Exception) {}
+                try { bootstrapManager.writeResolvConf() } catch (_: Exception) {}
+            }.start()
+        }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
@@ -160,6 +172,50 @@ class MainActivity : FlutterActivity() {
                     val text = call.argument<String>("text") ?: "Node connected"
                     NodeForegroundService.updateStatus(text)
                     result.success(true)
+                }
+                "startSshd" -> {
+                    val port = call.argument<Int>("port") ?: 8022
+                    try {
+                        SshForegroundService.start(applicationContext, port)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("SERVICE_ERROR", e.message, null)
+                    }
+                }
+                "stopSshd" -> {
+                    try {
+                        SshForegroundService.stop(applicationContext)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("SERVICE_ERROR", e.message, null)
+                    }
+                }
+                "isSshdRunning" -> {
+                    result.success(SshForegroundService.isRunning)
+                }
+                "getSshdPort" -> {
+                    result.success(SshForegroundService.currentPort)
+                }
+                "getDeviceIps" -> {
+                    result.success(SshForegroundService.getDeviceIps())
+                }
+                "setRootPassword" -> {
+                    val password = call.argument<String>("password")
+                    if (password != null) {
+                        Thread {
+                            try {
+                                val escaped = password.replace("'", "'\\''")
+                                processManager.runInProotSync(
+                                    "echo 'root:$escaped' | chpasswd", 15
+                                )
+                                runOnUiThread { result.success(true) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("SSH_ERROR", e.message, null) }
+                            }
+                        }.start()
+                    } else {
+                        result.error("INVALID_ARGS", "password required", null)
+                    }
                 }
                 "requestBatteryOptimization" -> {
                     try {
@@ -339,6 +395,72 @@ class MainActivity : FlutterActivity() {
                         result.error("VIBRATE_ERROR", e.message, null)
                     }
                 }
+                "requestStoragePermission" -> {
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            // Android 11+: MANAGE_EXTERNAL_STORAGE
+                            if (!Environment.isExternalStorageManager()) {
+                                val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                                startActivity(intent)
+                            }
+                        } else {
+                            // Android 10 and below: READ/WRITE_EXTERNAL_STORAGE
+                            ActivityCompat.requestPermissions(
+                                this,
+                                arrayOf(
+                                    Manifest.permission.READ_EXTERNAL_STORAGE,
+                                    Manifest.permission.WRITE_EXTERNAL_STORAGE
+                                ),
+                                STORAGE_PERMISSION_REQUEST
+                            )
+                        }
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("STORAGE_ERROR", e.message, null)
+                    }
+                }
+                "hasStoragePermission" -> {
+                    val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        Environment.isExternalStorageManager()
+                    } else {
+                        ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+                    }
+                    result.success(hasPermission)
+                }
+                "getExternalStoragePath" -> {
+                    result.success(Environment.getExternalStorageDirectory().absolutePath)
+                }
+                "readRootfsFile" -> {
+                    val path = call.argument<String>("path")
+                    if (path != null) {
+                        Thread {
+                            try {
+                                val content = bootstrapManager.readRootfsFile(path)
+                                runOnUiThread { result.success(content) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("ROOTFS_READ_ERROR", e.message, null) }
+                            }
+                        }.start()
+                    } else {
+                        result.error("INVALID_ARGS", "path required", null)
+                    }
+                }
+                "writeRootfsFile" -> {
+                    val path = call.argument<String>("path")
+                    val content = call.argument<String>("content")
+                    if (path != null && content != null) {
+                        Thread {
+                            try {
+                                bootstrapManager.writeRootfsFile(path, content)
+                                runOnUiThread { result.success(true) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("ROOTFS_WRITE_ERROR", e.message, null) }
+                            }
+                        }.start()
+                    } else {
+                        result.error("INVALID_ARGS", "path and content required", null)
+                    }
+                }
                 "readSensor" -> {
                     val sensorType = call.argument<String>("sensor") ?: "accelerometer"
                     Thread {
@@ -408,6 +530,7 @@ class MainActivity : FlutterActivity() {
 
         createUrlNotificationChannel()
         requestNotificationPermission()
+        requestStoragePermissionOnLaunch()
 
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL).setStreamHandler(
             object : EventChannel.StreamHandler {
@@ -430,6 +553,30 @@ class MainActivity : FlutterActivity() {
                     this,
                     arrayOf(Manifest.permission.POST_NOTIFICATIONS),
                     NOTIFICATION_PERMISSION_REQUEST
+                )
+            }
+        }
+    }
+
+    private fun requestStoragePermissionOnLaunch() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (!Environment.isExternalStorageManager()) {
+                try {
+                    val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                    startActivity(intent)
+                } catch (_: Exception) {}
+            }
+        } else {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(
+                        Manifest.permission.READ_EXTERNAL_STORAGE,
+                        Manifest.permission.WRITE_EXTERNAL_STORAGE
+                    ),
+                    STORAGE_PERMISSION_REQUEST
                 )
             }
         }
@@ -522,5 +669,6 @@ class MainActivity : FlutterActivity() {
         const val URL_CHANNEL_ID = "openclaw_urls"
         const val NOTIFICATION_PERMISSION_REQUEST = 1001
         const val SCREEN_CAPTURE_REQUEST = 1002
+        const val STORAGE_PERMISSION_REQUEST = 1003
     }
 }

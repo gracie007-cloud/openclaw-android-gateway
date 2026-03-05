@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../app.dart';
@@ -28,6 +30,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _loading = true;
   bool _goInstalled = false;
   bool _brewInstalled = false;
+  bool _sshInstalled = false;
+  bool _storageGranted = false;
 
   @override
   void initState() {
@@ -46,20 +50,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final status = await NativeBridge.getBootstrapStatus();
       final batteryOptimized = await NativeBridge.isBatteryOptimized();
 
+      final storageGranted = await NativeBridge.hasStoragePermission();
+
       // Check optional package statuses
       final filesDir = await NativeBridge.getFilesDir();
       final rootfs = '$filesDir/rootfs/ubuntu';
       final goInstalled = File('$rootfs/usr/bin/go').existsSync();
       final brewInstalled =
           File('$rootfs/home/linuxbrew/.linuxbrew/bin/brew').existsSync();
+      final sshInstalled = File('$rootfs/usr/bin/ssh').existsSync();
 
       setState(() {
         _batteryOptimized = batteryOptimized;
+        _storageGranted = storageGranted;
         _arch = arch;
         _prootPath = prootPath;
         _status = status;
         _goInstalled = goInstalled;
         _brewInstalled = brewInstalled;
+        _sshInstalled = sshInstalled;
         _loading = false;
       });
     } catch (e) {
@@ -103,6 +112,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     // Refresh status after returning from settings
                     final optimized = await NativeBridge.isBatteryOptimized();
                     setState(() => _batteryOptimized = optimized);
+                  },
+                ),
+                ListTile(
+                  title: const Text('Setup Storage'),
+                  subtitle: Text(_storageGranted
+                      ? 'Granted — /sdcard accessible in proot'
+                      : 'Allow access to shared storage'),
+                  leading: const Icon(Icons.sd_storage),
+                  trailing: _storageGranted
+                      ? const Icon(Icons.check_circle, color: AppColors.statusGreen)
+                      : const Icon(Icons.warning, color: AppColors.statusAmber),
+                  onTap: () async {
+                    await NativeBridge.requestStoragePermission();
+                    // Refresh after returning from permission screen
+                    final granted = await NativeBridge.hasStoragePermission();
+                    setState(() => _storageGranted = granted);
                   },
                 ),
                 const Divider(),
@@ -178,8 +203,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       : 'Not installed'),
                   leading: const Icon(Icons.science),
                 ),
+                ListTile(
+                  title: const Text('OpenSSH'),
+                  subtitle: Text(_sshInstalled
+                      ? 'Installed'
+                      : 'Not installed'),
+                  leading: const Icon(Icons.vpn_key),
+                ),
                 const Divider(),
                 _sectionHeader(theme, 'MAINTENANCE'),
+                ListTile(
+                  title: const Text('Export Snapshot'),
+                  subtitle: const Text('Backup config to Downloads'),
+                  leading: const Icon(Icons.upload_file),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _exportSnapshot,
+                ),
+                ListTile(
+                  title: const Text('Import Snapshot'),
+                  subtitle: const Text('Restore config from backup'),
+                  leading: const Icon(Icons.download),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _importSnapshot,
+                ),
                 ListTile(
                   title: const Text('Re-run setup'),
                   subtitle: const Text('Reinstall or repair the environment'),
@@ -274,6 +320,97 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
             ),
     );
+  }
+
+  Future<String> _getSnapshotPath() async {
+    final hasPermission = await NativeBridge.hasStoragePermission();
+    if (hasPermission) {
+      final sdcard = await NativeBridge.getExternalStoragePath();
+      final downloadDir = Directory('$sdcard/Download');
+      if (!await downloadDir.exists()) {
+        await downloadDir.create(recursive: true);
+      }
+      return '$sdcard/Download/openclaw-snapshot.json';
+    }
+    // Fallback to app-private directory
+    final dir = await getApplicationDocumentsDirectory();
+    return '${dir.path}/openclaw-snapshot.json';
+  }
+
+  Future<void> _exportSnapshot() async {
+    try {
+      final openclawJson = await NativeBridge.readRootfsFile('root/.openclaw/openclaw.json');
+      final snapshot = {
+        'version': AppConstants.version,
+        'timestamp': DateTime.now().toIso8601String(),
+        'openclawConfig': openclawJson,
+        'dashboardUrl': _prefs.dashboardUrl,
+        'autoStart': _prefs.autoStartGateway,
+        'nodeEnabled': _prefs.nodeEnabled,
+      };
+
+      final path = await _getSnapshotPath();
+      final file = File(path);
+      await file.writeAsString(const JsonEncoder.withIndent('  ').convert(snapshot));
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Snapshot saved to $path')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Export failed: $e')),
+      );
+    }
+  }
+
+  Future<void> _importSnapshot() async {
+    try {
+      final path = await _getSnapshotPath();
+      final file = File(path);
+
+      if (!await file.exists()) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No snapshot found at $path')),
+        );
+        return;
+      }
+
+      final content = await file.readAsString();
+      final snapshot = jsonDecode(content) as Map<String, dynamic>;
+
+      // Restore openclaw.json into rootfs
+      final openclawConfig = snapshot['openclawConfig'] as String?;
+      if (openclawConfig != null) {
+        await NativeBridge.writeRootfsFile('root/.openclaw/openclaw.json', openclawConfig);
+      }
+
+      // Restore preferences
+      if (snapshot['dashboardUrl'] != null) {
+        _prefs.dashboardUrl = snapshot['dashboardUrl'] as String;
+      }
+      if (snapshot['autoStart'] != null) {
+        _prefs.autoStartGateway = snapshot['autoStart'] as bool;
+      }
+      if (snapshot['nodeEnabled'] != null) {
+        _prefs.nodeEnabled = snapshot['nodeEnabled'] as bool;
+      }
+
+      // Refresh UI
+      await _loadSettings();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Snapshot restored successfully. Restart the gateway to apply.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Import failed: $e')),
+      );
+    }
   }
 
   Widget _sectionHeader(ThemeData theme, String title) {

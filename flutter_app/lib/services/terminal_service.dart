@@ -1,5 +1,7 @@
+import 'dart:io';
 import 'package:flutter/services.dart';
 import '../constants.dart';
+import 'native_bridge.dart';
 
 /// Provides proot shell configuration for the terminal and onboarding screens.
 /// Must match ProcessManager.kt's gateway mode (command_login) exactly.
@@ -13,7 +15,15 @@ class TerminalService {
   /// Get paths and host-side proot environment variables.
   /// Host env should ONLY contain proot-specific vars — guest env is
   /// set via `env -i` inside the command, matching proot-distro.
+  ///
+  /// Also ensures directories and resolv.conf exist — Android may clear
+  /// them during an app update (#40). Every screen that uses proot calls
+  /// this method, so it's the single place to guarantee the files exist.
   static Future<Map<String, String>> getProotShellConfig() async {
+    // Ensure dirs + resolv.conf exist before any proot operation (#40).
+    try { await NativeBridge.setupDirs(); } catch (_) {}
+    try { await NativeBridge.writeResolv(); } catch (_) {}
+
     final filesDir = await _channel.invokeMethod<String>('getFilesDir') ?? '';
     final nativeLibDir = await _channel.invokeMethod<String>('getNativeLibDir') ?? '';
 
@@ -24,6 +34,27 @@ class TerminalService {
     final prootPath = '$nativeLibDir/libproot.so';
     final libDir = '$filesDir/lib';
 
+    // Direct Dart fallback: create resolv.conf if it still doesn't exist
+    // after the native method channel calls (#40).
+    const resolvContent = 'nameserver 8.8.8.8\nnameserver 8.8.4.4\n';
+    try {
+      final resolvFile = File('$configDir/resolv.conf');
+      if (!resolvFile.existsSync()) {
+        Directory(configDir).createSync(recursive: true);
+        resolvFile.writeAsStringSync(resolvContent);
+      }
+    } catch (_) {}
+    // Also write into rootfs /etc/ so DNS works even if bind-mount fails
+    try {
+      final rootfsResolv = File('$rootfsDir/etc/resolv.conf');
+      if (!rootfsResolv.existsSync()) {
+        rootfsResolv.parent.createSync(recursive: true);
+        rootfsResolv.writeAsStringSync(resolvContent);
+      }
+    } catch (_) {}
+
+    final storageGranted = await NativeBridge.hasStoragePermission();
+
     return {
       'executable': prootPath,
       'rootfsDir': rootfsDir,
@@ -32,6 +63,7 @@ class TerminalService {
       'homeDir': homeDir,
       'libDir': libDir,
       'nativeLibDir': nativeLibDir,
+      'storageGranted': storageGranted.toString(),
       // Host-side proot env — ONLY proot-specific vars.
       // Do NOT set PROOT_NO_SECCOMP (proot-distro doesn't set it).
       // Do NOT set HOME/TERM/LANG here (those go in guest env via env -i).
@@ -62,7 +94,7 @@ class TerminalService {
     final kernelRelease = '\\Linux\\localhost\\$_fakeKernelRelease'
         '\\$_fakeKernelVersion\\$machine\\localdomain\\-1\\';
 
-    return [
+    final args = <String>[
       // proot-distro command_login style
       '--change-id=0:0',
       '--sysvipc',
@@ -97,6 +129,17 @@ class TerminalService {
       // App-specific binds
       '--bind=${config['configDir']}/resolv.conf:/etc/resolv.conf',
       '--bind=${config['homeDir']}:/root/home',
+    ];
+
+    // Bind-mount shared storage if permission is granted (Termux-style)
+    if (config['storageGranted'] == 'true') {
+      args.addAll([
+        '--bind=/storage:/storage',
+        '--bind=/storage/emulated/0:/sdcard',
+      ]);
+    }
+
+    args.addAll([
       // Clean guest environment via env -i (matching proot-distro).
       // This prevents Android JVM vars (LD_PRELOAD, CLASSPATH, DEX2OAT,
       // ANDROID_ROOT, etc.) from leaking into the proot guest.
@@ -112,7 +155,9 @@ class TerminalService {
       'NODE_OPTIONS=--require /root/.openclaw/bionic-bypass.js',
       '/bin/bash',
       '-l',
-    ];
+    ]);
+
+    return args;
   }
 
   /// Host-side environment map for Pty.start().

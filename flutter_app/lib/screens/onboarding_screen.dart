@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
@@ -6,6 +7,7 @@ import 'package:flutter_pty/flutter_pty.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../constants.dart';
 import '../services/native_bridge.dart';
+import '../services/screenshot_service.dart';
 import '../services/terminal_service.dart';
 import '../services/preferences_service.dart';
 import '../widgets/terminal_toolbar.dart';
@@ -32,6 +34,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool _loading = true;
   bool _finished = false;
   String? _error;
+  final _ctrlNotifier = ValueNotifier<bool>(false);
+  final _altNotifier = ValueNotifier<bool>(false);
+  final _screenshotKey = GlobalKey();
   static final _anyUrlRegex = RegExp(r'https?://[^\s<>\[\]"' "'" r'\)]+');
   static final _tokenUrlRegex = RegExp(r'https?://(?:localhost|127\.0\.0\.1):18789/#token=[0-9a-f]+');
   static final _ansiEscape = AppConstants.ansiEscape;
@@ -71,7 +76,27 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Future<void> _startOnboarding() async {
+    _pty?.kill();
+    _pty = null;
     try {
+      // Ensure dirs + resolv.conf exist before proot starts (#40).
+      try { await NativeBridge.setupDirs(); } catch (_) {}
+      try { await NativeBridge.writeResolv(); } catch (_) {}
+      try {
+        final filesDir = await NativeBridge.getFilesDir();
+        const resolvContent = 'nameserver 8.8.8.8\nnameserver 8.8.4.4\n';
+        final resolvFile = File('$filesDir/config/resolv.conf');
+        if (!resolvFile.existsSync()) {
+          Directory('$filesDir/config').createSync(recursive: true);
+          resolvFile.writeAsStringSync(resolvContent);
+        }
+        // Also write into rootfs /etc/ so DNS works even if bind-mount fails
+        final rootfsResolv = File('$filesDir/rootfs/ubuntu/etc/resolv.conf');
+        if (!rootfsResolv.existsSync()) {
+          rootfsResolv.parent.createSync(recursive: true);
+          rootfsResolv.writeAsStringSync(resolvContent);
+        }
+      } catch (_) {}
       final config = await TerminalService.getProotShellConfig();
       final args = TerminalService.buildProotArgs(
         config,
@@ -142,6 +167,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       });
 
       _terminal.onOutput = (data) {
+        if (_ctrlNotifier.value && data.length == 1) {
+          final code = data.toLowerCase().codeUnitAt(0);
+          if (code >= 97 && code <= 122) {
+            _pty?.write(Uint8List.fromList([code - 96]));
+            _ctrlNotifier.value = false;
+            return;
+          }
+        }
+        if (_altNotifier.value && data.isNotEmpty) {
+          _pty?.write(utf8.encode('\x1b$data'));
+          _altNotifier.value = false;
+          return;
+        }
         _pty?.write(utf8.encode(data));
       };
 
@@ -166,6 +204,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   @override
   void dispose() {
+    _ctrlNotifier.dispose();
+    _altNotifier.dispose();
     _controller.dispose();
     _pty?.kill();
     NativeBridge.stopTerminalService();
@@ -272,6 +312,18 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
   }
 
+  Future<void> _takeScreenshot() async {
+    final path = await ScreenshotService.capture(_screenshotKey, prefix: 'onboarding');
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(path != null
+            ? 'Screenshot saved: ${path.split('/').last}'
+            : 'Failed to capture screenshot'),
+      ),
+    );
+  }
+
   void _handleTap(TapUpDetails details, CellOffset offset) {
     // Join adjacent lines and extract URL, handling wrapped URLs
     // and TUI box-drawing characters.
@@ -373,6 +425,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         automaticallyImplyLeading: false,
         actions: [
           IconButton(
+            icon: const Icon(Icons.camera_alt_outlined),
+            tooltip: 'Screenshot',
+            onPressed: _takeScreenshot,
+          ),
+          IconButton(
             icon: const Icon(Icons.copy),
             tooltip: 'Copy',
             onPressed: _copySelection,
@@ -443,19 +500,26 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             )
           else ...[
             Expanded(
-              child: TerminalView(
-                _terminal,
-                controller: _controller,
-                textStyle: const TerminalStyle(
-                  fontSize: 11,
-                  height: 1.0,
-                  fontFamily: 'DejaVuSansMono',
-                  fontFamilyFallback: _fontFallback,
+              child: RepaintBoundary(
+                key: _screenshotKey,
+                child: TerminalView(
+                  _terminal,
+                  controller: _controller,
+                  textStyle: const TerminalStyle(
+                    fontSize: 11,
+                    height: 1.0,
+                    fontFamily: 'DejaVuSansMono',
+                    fontFamilyFallback: _fontFallback,
+                  ),
+                  onTapUp: _handleTap,
                 ),
-                onTapUp: _handleTap,
               ),
             ),
-            TerminalToolbar(pty: _pty),
+            TerminalToolbar(
+              pty: _pty,
+              ctrlNotifier: _ctrlNotifier,
+              altNotifier: _altNotifier,
+            ),
           ],
           if (_finished)
             Padding(

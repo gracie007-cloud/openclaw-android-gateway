@@ -12,6 +12,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import io.flutter.plugin.common.EventChannel
 import java.io.BufferedReader
+import java.io.File
 import java.io.InputStreamReader
 
 class GatewayService : Service() {
@@ -54,6 +55,10 @@ class GatewayService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, buildNotification("Starting..."))
+        if (isRunning) {
+            updateNotificationRunning()
+            return START_STICKY
+        }
         acquireWakeLock()
         startGateway()
         return START_STICKY
@@ -70,6 +75,7 @@ class GatewayService : Service() {
     }
 
     private fun startGateway() {
+        if (gatewayProcess?.isAlive == true) return
         isRunning = true
         instance = this
         startTime = System.currentTimeMillis()
@@ -79,6 +85,42 @@ class GatewayService : Service() {
                 val filesDir = applicationContext.filesDir.absolutePath
                 val nativeLibDir = applicationContext.applicationInfo.nativeLibraryDir
                 val pm = ProcessManager(filesDir, nativeLibDir)
+
+                // Recreate all directories (config, tmp, home, lib, proc/sys fakes)
+                // in case Android cleared them after an app update (#40).
+                // This must run before proot — it needs bind-mount targets.
+                val bootstrapManager = BootstrapManager(applicationContext, filesDir, nativeLibDir)
+                try {
+                    bootstrapManager.setupDirectories()
+                } catch (e: Exception) {
+                    emitLog("[WARN] setupDirectories failed: ${e.message}")
+                }
+                try {
+                    bootstrapManager.writeResolvConf()
+                } catch (e: Exception) {
+                    emitLog("[WARN] writeResolvConf failed: ${e.message}")
+                }
+
+                // Last-resort: verify resolv.conf exists, create inline if not
+                val resolvContent = "nameserver 8.8.8.8\nnameserver 8.8.4.4\n"
+                try {
+                    val resolvFile = File(filesDir, "config/resolv.conf")
+                    if (!resolvFile.exists() || resolvFile.length() == 0L) {
+                        resolvFile.parentFile?.mkdirs()
+                        resolvFile.writeText(resolvContent)
+                        emitLog("[INFO] resolv.conf created (inline fallback)")
+                    }
+                } catch (e: Exception) {
+                    emitLog("[WARN] inline resolv.conf fallback failed: ${e.message}")
+                }
+                // Also write into rootfs /etc/ so DNS works even if bind-mount fails
+                try {
+                    val rootfsResolv = File(filesDir, "rootfs/ubuntu/etc/resolv.conf")
+                    if (!rootfsResolv.exists() || rootfsResolv.length() == 0L) {
+                        rootfsResolv.parentFile?.mkdirs()
+                        rootfsResolv.writeText(resolvContent)
+                    }
+                } catch (_: Exception) {}
 
                 gatewayProcess = pm.startProotProcess("openclaw gateway --verbose")
                 updateNotificationRunning()
@@ -182,6 +224,7 @@ class GatewayService : Service() {
     }
 
     private fun acquireWakeLock() {
+        releaseWakeLock()
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,

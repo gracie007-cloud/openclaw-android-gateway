@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../constants.dart';
 import '../models/gateway_state.dart';
@@ -38,6 +39,27 @@ class GatewayService {
     final prefs = PreferencesService();
     await prefs.init();
     final savedUrl = prefs.dashboardUrl;
+
+    // Always ensure directories and resolv.conf exist on app open.
+    // Android may clear the files directory during an app update (#40).
+    try { await NativeBridge.setupDirs(); } catch (_) {}
+    try { await NativeBridge.writeResolv(); } catch (_) {}
+    // Dart dart:io fallback if native calls failed (#40).
+    try {
+      final filesDir = await NativeBridge.getFilesDir();
+      const resolvContent = 'nameserver 8.8.8.8\nnameserver 8.8.4.4\n';
+      final resolvFile = File('$filesDir/config/resolv.conf');
+      if (!resolvFile.existsSync()) {
+        Directory('$filesDir/config').createSync(recursive: true);
+        resolvFile.writeAsStringSync(resolvContent);
+      }
+      // Also write into rootfs /etc/ so DNS works even if bind-mount fails
+      final rootfsResolv = File('$filesDir/rootfs/ubuntu/etc/resolv.conf');
+      if (!rootfsResolv.existsSync()) {
+        rootfsResolv.parent.createSync(recursive: true);
+        rootfsResolv.writeAsStringSync(resolvContent);
+      }
+    } catch (_) {}
 
     final alreadyRunning = await NativeBridge.isGatewayRunning();
     if (alreadyRunning) {
@@ -134,6 +156,26 @@ fs.writeFileSync(p, JSON.stringify(c, null, 2));
     ));
 
     try {
+      // Ensure directories exist — Android may have cleared them (#40).
+      // Non-fatal: the GatewayService foreground service also creates them.
+      try { await NativeBridge.setupDirs(); } catch (_) {}
+      try { await NativeBridge.writeResolv(); } catch (_) {}
+      // Dart dart:io fallback if native calls failed (#40).
+      try {
+        final filesDir = await NativeBridge.getFilesDir();
+        const resolvContent = 'nameserver 8.8.8.8\nnameserver 8.8.4.4\n';
+        final resolvFile = File('$filesDir/config/resolv.conf');
+        if (!resolvFile.existsSync()) {
+          Directory('$filesDir/config').createSync(recursive: true);
+          resolvFile.writeAsStringSync(resolvContent);
+        }
+        // Also write into rootfs /etc/ so DNS works even if bind-mount fails
+        final rootfsResolv = File('$filesDir/rootfs/ubuntu/etc/resolv.conf');
+        if (!rootfsResolv.existsSync()) {
+          rootfsResolv.parent.createSync(recursive: true);
+          rootfsResolv.writeAsStringSync(resolvContent);
+        }
+      } catch (_) {}
       await _writeNodeAllowConfig();
       await NativeBridge.startGateway();
       _subscribeLogs();
